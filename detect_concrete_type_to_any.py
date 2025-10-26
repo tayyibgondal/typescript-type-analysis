@@ -1,20 +1,13 @@
 """
-Pipeline to extract TypeScript type-related PRs from AI coding agents
-in the AIDev dataset (100+ stars subset)
+High-precision pipeline to extract TypeScript type-related PRs
+with malicious any replacement detection (concrete type → any)
 
-This pipeline:
-1. Loads the AIDev-pop dataset (repos with 100+ stars)
-2. Filters for TypeScript repositories
-3. Identifies type-related PRs based on multiple signals
-4. Enriches with commit statistics (lines added/deleted)
-5. Exports results to CSV
-
-Improvements (Imgyeong Lee):
-- Score-based detection with weighted signals
-- Strong false positive filtering (HTML, typeof, JSDoc, etc.)
-- Patch-level type change validation
-- Context-aware: only .ts/.tsx files, no .d.ts
-- Fully compatible with original pipeline
+Features:
+- Includes ALL type changes
+- Detects: - string → + any (any_replacements)
+- Counts: any_additions, any_removals, any_replacements
+- Strong FP filtering + score system
+- Full CSV + JSON summary
 """
 
 import pandas as pd
@@ -25,19 +18,19 @@ from datetime import datetime
 import os
 from pathlib import Path
 
-class TypeScriptTypePRExtractorV2:
-    """High-precision extractor for TypeScript type-related PRs (includes any additions)"""
+class TypeScriptTypePRExtractorV3:
+    """Extractor with malicious any replacement detection"""
     
-    # File extensions filter
+    # File extensions
     TS_EXTENSIONS = {'.ts', '.tsx'}
     
-    # type-related keywords with weighted scores
+    # Type keywords with scores
     TYPE_KEYWORDS_SCORED = [
-        (r'\btype\s+\w+\s*=', 12),           # type User = ...
-        (r'\binterface\s+\w+', 12),          # interface User
-        (r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 10), # : User, : string (uppercase = custom type)
-        (r'as\s+[A-Z][a-zA-Z]*', 8),         # as User
-        (r'<[A-Z][a-zA-Z]*>', 7),            # <T>, <User>
+        (r'\btype\s+\w+\s*=', 12),
+        (r'\binterface\s+\w+', 12),
+        (r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 10),
+        (r'as\s+[A-Z][a-zA-Z]*', 8),
+        (r'<[A-Z][a-zA-Z]*>', 7),
         (r'\btype\s+fix\b', 8),
         (r'\bfix.*type error\b', 9),
         (r'\bnoImplicitAny\b', 11),
@@ -47,29 +40,36 @@ class TypeScriptTypePRExtractorV2:
         (r'\brefactor.*\btype\b', 6),
     ]
     
-    # detect type changes in patch (any added = also valid)
+    # Patch patterns (any addition included)
     PATCH_ADDITION_PATTERNS = [
-        (r'^\+\s*.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]', 15),     # + name: string
-        (r'^\+\s*.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 18),     # + user: User
-        (r'^\+\s*(interface|type)\s+\w+', 25),            # + interface User
-        (r'^\+\s*.*\s+as\s+[A-Z][a-zA-Z]*', 12),          # + value as User
-        (r'^\+\s*.*<[^<>]*[A-Z][a-zA-Z][^<>]*>', 10),      # + Array<User>
-        (r'^\+\s*.*:\s*any\b', 18),                       # + name: any (included!)
-        (r'^\-\s*.*:\s*any\b', 20),                       # - name: any
+        (r'^\+\s*.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]', 15),
+        (r'^\+\s*.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 18),
+        (r'^\+\s*(interface|type)\s+\w+', 25),
+        (r'^\+\s*.*\s+as\s+[A-Z][a-zA-Z]*', 12),
+        (r'^\+\s*.*<[^<>]*[A-Z][a-zA-Z][^<>]*>', 10),
+        (r'^\+\s*.*:\s*any\b', 18),  # any addition
+        (r'^\-\s*.*:\s*any\b', 20),  # any removal
     ]
     
-    # strong exclusion of false positives
+    # FP exclusion
     FP_EXCLUDE_PATTERNS = [
-        r'type\s*=\s*["\']',           # <input type="text">
-        r'typeof\s+\w+',               # typeof x
-        r'@type\s+{',                  # JSDoc @type
-        r'console\.log.*type',         # debugging
-        r'button.*type',               # HTML button
-        r'input.*type',                # HTML input
-        r'\.d\.ts\b',                  # .d.ts file name
+        r'type\s*=\s*["\']',
+        r'typeof\s+\w+',
+        r'@type\s+{',
+        r'console\.log.*type',
+        r'button.*type',
+        r'input.*type',
+        r'\.d\.ts\b',
     ]
     
-    # score criteria
+    # Malicious any replacement pattern
+    ANY_REPLACEMENT_PATTERN = re.compile(
+        r'^\-\s*.*:\s*([a-zA-Z_][\w\[\]<>]*)\s*[;\)\}]?\s*$\n'
+        r'^\+\s*.*:\s*any\b',
+        re.MULTILINE
+    )
+    
+    # Score thresholds
     MIN_TITLE_SCORE = 10
     MIN_PATCH_SCORE = 18
     MIN_TOTAL_SCORE = 28
@@ -138,9 +138,9 @@ class TypeScriptTypePRExtractorV2:
         return path.suffix.lower() in self.TS_EXTENSIONS and not path.name.endswith('.d.ts')
 
     def identify_type_related_prs(self, agent_prs: pd.DataFrame) -> pd.DataFrame:
-        print("\nIdentifying type-related PRs (includes any additions)...")
+        print("\nIdentifying type-related PRs with malicious any detection...")
 
-        # 1. False Positive removal
+        # FP filtering
         print("   Applying FP filters...")
         agent_prs['has_fp'] = (
             agent_prs['title'].apply(self._has_fp) |
@@ -150,13 +150,13 @@ class TypeScriptTypePRExtractorV2:
         agent_prs = agent_prs[~agent_prs['has_fp']].copy()
         print(f"   Removed {fp_count:,} FPs")
 
-        # 2. Text score
+        # Text scoring
         print("   Scoring title & body...")
         agent_prs['title_score'] = agent_prs['title'].apply(self._score_text)
         agent_prs['body_score'] = agent_prs['body'].apply(self._score_text)
         agent_prs['text_score'] = agent_prs['title_score'] + agent_prs['body_score']
 
-        # 3. Commit message score
+        # Commit message scoring
         print("   Scoring commit messages...")
         commit_scores = self.pr_commits_df.groupby('pr_id').apply(
             lambda g: max(self._score_text(msg) for msg in g['message']),
@@ -164,8 +164,8 @@ class TypeScriptTypePRExtractorV2:
         ).to_dict()
         agent_prs['commit_score'] = agent_prs['id'].map(commit_scores).fillna(0).astype(int)
 
-        # 4. Patch score + any addition/removal count
-        print("   Analyzing patches in .ts/.tsx files...")
+        # Patch analysis with any_replacements
+        print("   Analyzing patches + detecting malicious any replacements...")
         ts_details = self.pr_commit_details_df[
             self.pr_commit_details_df['filename'].apply(self._is_valid_ts_file)
         ]
@@ -174,31 +174,38 @@ class TypeScriptTypePRExtractorV2:
             max_score = 0
             any_add = 0
             any_rem = 0
+            any_replacements = 0
+
             for patch in group['patch']:
                 if pd.isna(patch): continue
-                # score
+                # Score
                 patch_score = self._score_patch(patch)
                 max_score = max(max_score, patch_score)
-                # any count
+                # any counts
                 any_add += len(re.findall(r'^\+\s*.*:\s*any\b', patch, re.MULTILINE))
                 any_rem += len(re.findall(r'^\-\s*.*:\s*any\b', patch, re.MULTILINE))
+                # Malicious replacement: concrete type → any
+                any_replacements += len(self.ANY_REPLACEMENT_PATTERN.findall(patch))
+
             return pd.Series({
                 'patch_score': max_score,
                 'any_additions': any_add,
-                'any_removals': any_rem
+                'any_removals': any_rem,
+                'any_replacements': any_replacements
             })
 
         patch_stats = ts_details.groupby('pr_id').apply(analyze_patch_group, include_groups=False)
         agent_prs['patch_score'] = agent_prs['id'].map(patch_stats['patch_score'].to_dict()).fillna(0).astype(int)
         agent_prs['any_additions'] = agent_prs['id'].map(patch_stats['any_additions'].to_dict()).fillna(0).astype(int)
         agent_prs['any_removals'] = agent_prs['id'].map(patch_stats['any_removals'].to_dict()).fillna(0).astype(int)
+        agent_prs['any_replacements'] = agent_prs['id'].map(patch_stats['any_replacements'].to_dict()).fillna(0).astype(int)
 
-        # 5. Check if TS files exist
+        # TS file count
         ts_file_count = ts_details.groupby('pr_id').size().to_dict()
         agent_prs['ts_file_count'] = agent_prs['id'].map(ts_file_count).fillna(0).astype(int)
         agent_prs['has_ts_files'] = agent_prs['ts_file_count'] > 0
 
-        # 6. Final score
+        # Total score
         agent_prs['total_score'] = (
             agent_prs['text_score'] +
             agent_prs['commit_score'] +
@@ -206,7 +213,7 @@ class TypeScriptTypePRExtractorV2:
             (agent_prs['ts_file_count'] * 2)
         )
 
-        # 7. Filtering (any addition count does not matter)
+        # Final filtering
         type_prs = agent_prs[
             agent_prs['has_ts_files'] &
             (
@@ -216,17 +223,16 @@ class TypeScriptTypePRExtractorV2:
             (agent_prs['total_score'] >= self.MIN_TOTAL_SCORE)
         ].copy()
 
-        # detection method
+        # Detection method
         type_prs['detection_method'] = ''
         type_prs.loc[type_prs['text_score'] >= self.MIN_TITLE_SCORE, 'detection_method'] += 'text|'
         type_prs.loc[type_prs['patch_score'] >= self.MIN_PATCH_SCORE, 'detection_method'] += 'patch|'
         type_prs['detection_method'] = type_prs['detection_method'].str.rstrip('|')
 
-        print(f"\n   Found {len(type_prs):,} type-related PRs (any additions included)")
-        print(f"   Any additions: {type_prs['any_additions'].sum():,}")
-        print(f"   Any removals: {type_prs['any_removals'].sum():,}")
-        print(f"   Detection: text={type_prs['detection_method'].str.contains('text').sum():,}, "
-              f"patch={type_prs['detection_method'].str.contains('patch').sum():,}")
+        print(f"\n   Found {len(type_prs):,} type-related PRs")
+        print(f"   any_additions: {type_prs['any_additions'].sum():,}")
+        print(f"   any_removals: {type_prs['any_removals'].sum():,}")
+        print(f"   any_replacements: {type_prs['any_replacements'].sum():,}")
 
         return type_prs
 
@@ -267,7 +273,7 @@ class TypeScriptTypePRExtractorV2:
         export_cols = [
             'id', 'number', 'title', 'body', 'agent', 'state', 'created_at', 'merged_at',
             'repo_id', 'html_url', 'additions', 'deletions', 'changes', 'ts_files_changed',
-            'any_additions', 'any_removals',
+            'any_additions', 'any_removals', 'any_replacements',
             'text_score', 'patch_score', 'total_score', 'detection_method', 'patch_text'
         ]
         enriched_prs[export_cols].to_csv(output_file, index=False)
@@ -279,7 +285,9 @@ class TypeScriptTypePRExtractorV2:
             'by_agent': enriched_prs['agent'].value_counts().to_dict(),
             'any_additions_total': int(enriched_prs['any_additions'].sum()),
             'any_removals_total': int(enriched_prs['any_removals'].sum()),
+            'any_replacements_total': int(enriched_prs['any_replacements'].sum()),
             'prs_with_any_change': int(((enriched_prs['any_additions'] + enriched_prs['any_removals']) > 0).sum()),
+            'prs_with_any_replacement': int((enriched_prs['any_replacements'] > 0).sum()),
             'avg_score': float(enriched_prs['total_score'].mean()),
             'detection_methods': enriched_prs['detection_method'].value_counts().to_dict()
         }
@@ -287,9 +295,9 @@ class TypeScriptTypePRExtractorV2:
             json.dump(summary, f, indent=2)
         print(f"   Summary saved to {output_file.replace('.csv', '_summary.json')}")
 
-    def run_pipeline(self, output_file: str = 'ts_type_prs_including_any.csv'):
+    def run_pipeline(self, output_file: str = 'ts_type_prs_with_any_replacement.csv'):
         print("="*80)
-        print("TypeScript Type-Related PR Extraction (Includes Any Additions)")
+        print("TypeScript Type-Related PR Extraction (with any replacement detection)")
         print("="*80)
 
         self.load_datasets()
@@ -301,15 +309,15 @@ class TypeScriptTypePRExtractorV2:
         self.typescript_type_prs = enriched
 
         print("\n" + "="*80)
-        print("Pipeline completed successfully!")
+        print("Pipeline completed!")
         print("="*80)
         return enriched
 
 
 def main():
-    extractor = TypeScriptTypePRExtractorV2()
+    extractor = TypeScriptTypePRExtractorV3()
     results = extractor.run_pipeline()
-    print(f"\nFinal: {len(results):,} type-related PRs extracted (any included).")
+    print(f"\nFinal: {len(results):,} type-related PRs extracted.")
     return results
 
 

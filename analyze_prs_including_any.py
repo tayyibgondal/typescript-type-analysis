@@ -1,4 +1,5 @@
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # Load CSV file
 CSV_FILE = 'ts_type_prs_including_any.csv'
@@ -20,7 +21,6 @@ print(agent_any_mean)
 # Visualization (optional)
 print("\n[Visualization] Average any additions per agent")
 agent_any_mean.plot(kind='barh', color='skyblue', title='Average any_additions per Agent')
-import matplotlib.pyplot as plt
 plt.xlabel('Average any_additions')
 plt.tight_layout()
 plt.show()

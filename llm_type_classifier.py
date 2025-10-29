@@ -166,7 +166,7 @@ A PR is type-related if it involves:
 **Your Task:**
 1. Carefully analyze all provided information
 2. Look for type-related keywords, patterns, and actual type changes
-3. Provide a clear YES or NO decision
+3. Provide a clear YES or NO decision 
 4. Explain your reasoning with specific evidence
 
 **Response Format (JSON):**

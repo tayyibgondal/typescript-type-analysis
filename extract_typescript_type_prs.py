@@ -5,10 +5,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-class TypeScriptTypePRExtractorV3:
+class TypeScriptTypePRExtractorV4:
     """
-    Extractor with malicious any replacement detection, optimized for performance.
-    Detects concrete type -> any changes in patches.
+    V4: Extractor focused on detecting and counting advanced TypeScript type features
+    and type safety patterns (generics, conditional types, satisfies, etc.)
+    in PR patch additions, comparing AI vs. Human problem-solving styles.
     """
     
     # AI Agents filter
@@ -17,33 +18,115 @@ class TypeScriptTypePRExtractorV3:
     # File extensions
     TS_EXTENSIONS = {'.ts', '.tsx'}
     
-    # Type keywords with scores
-    TYPE_KEYWORDS_SCORED = [
-        (r'\btype\s+\w+\s*=', 12),
-        (r'\binterface\s+\w+', 12),
-        (r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 10),
-        (r'as\s+[A-Z][a-zA-Z]*', 8),
-        (r'<[A-Z][a-zA-Z]*>', 7),
-        (r'\btype\s+fix\b', 8),
-        (r'\bfix.*type error\b', 9),
-        (r'\bnoImplicitAny\b', 11),
-        (r'\bstrictNullChecks\b', 11),
-        (r'\badd.*\btype\b', 6),
-        (r'\bimprove.*\btyping\b', 7),
-        (r'\brefactor.*\btype\b', 6),
+    # --- V4 NEW PATTERNS for Advanced Type Feature Counting (Refined for Rigor) ---
+    ADVANCED_TYPE_PATTERNS_REFINED = [
+        # 1. Generics: Type parameters in declarations (avoid JSX false positives)
+        # Target: class A<T> { ... } | type B<T> = ... | const func: <T>(a: T) => void
+        (r'(interface|type|class|function|declare\s+function|const\s+\w+\s*:\s*)\s*\w+\s*<[^<>]+>', 'generics_count'),
+
+        # 2. Conditional Types: T extends U ? X : Y
+        # Target: T extends string ? A : B
+        (r'\bextends\b\s*[^?]*\?\s*[^:]*:\s*', 'conditional_type_count'),
+
+        # 3. Infer keyword inside conditional types
+        # Target: infer T
+        (r'\binfer\s+\w+\b', 'infer_count'),
+
+        # 4. Mapped Types: {[K in keyof T]: ...}
+        # Target: [K in keyof T]: ... | [readonly K in keyof T]
+        (r'\[\s*(readonly\s+)?([A-Za-z_]\w*)\s+in\s+keyof\s+\w+\s*(\s*\?)?\s*\]', 'mapped_type_count'),
+
+        # 5. Key Remapping in mapped types (as ...)
+        # Target: [K in keyof T as \`\${K}Changed\`]: ...
+        (r'\[[^\]]+in[^\]]+\bas\s+[A-Za-z_]\w+[^\]]*\]', 'key_remap_count'),
+
+        # 6. Template Literal Types: `${string}` / `${infer T}`
+        # Target: `prefix${T}suffix`
+        (r'`[^`]*\$\{[^}]+}[^`]*`', 'template_literal_type_count'),
+
+        # 7. Satisfies operator (TS 4.9+)
+        # Target: obj satisfies Type
+        (r'\s+satisfies\s+', 'satisfies_count'),
+
+        # 8. As const: literal narrowing
+        # Target: as const
+        (r'\bas\s+const\b', 'as_const_count'),
+
+        # 9. Non-null Assertion Operator: foo!.bar, foo![0], foo!(), etc.
+        # Target: !. | ![ | !(
+        (r'!\s*([\.\[(])', 'non_null_assertion_count'),
+
+        # 10. Type Guard ('is'): return type predicate
+        # Target: is string
+        (r':\s*\(?\s*\w+\s+is\s+\w+', 'type_guard_is_count'),
+
+        # 11. Type-Level Operators (keyof, typeof, in)
+        (r'\bkeyof\b', 'keyof_count'),
+        (r'\btypeof\b', 'typeof_count'),
+        # 'in' operator distinguished by being inside square brackets for types
+        (r'\[[^\]]*\bin\b[^\]]*\]', 'in_operator_count'),
+
+        # 12. Intersection & Union Types (type-level operators)
+        # Ensures it's surrounded by type-like characters (not just logic)
+        (r'[A-Za-z0-9)\]]\s*&\s*[A-Za-z0-9(\[]', 'intersection_type_count'),
+        (r'[A-Za-z0-9)\]]\s*\|\s*[A-Za-z0-9(\[]', 'union_type_count'),
+
+        # 13. Indexed Access Types: T[K] using keyof for specific indexing
+        # Target: T[keyof K]
+        (r'\w+\s*\[\s*keyof\s*\w+\s*\]', 'indexed_access_count'),
+
+        # 14. Utility Types: Pick, Record, ReturnType, etc. (expanded list)
+        (r'\b(Partial|Required|Readonly|Pick|Omit|Record|ReturnType|InstanceType|Parameters|ConstructorParameters|Awaited|ThisType|Exclude|Extract|NonNullable)\s*<', 'utility_type_usage_count'),
+
+        # 15. Recursive / Self-referential type alias (Highly unreliable heuristic)
+        # Target: type A = A | B
+        # Note: This is a simplified pattern - full recursive detection is complex
+        (r'type\s+(\w+)\s*=\s*.*\b\1\b', 'recursive_type_count'),
+
+        # 16. Const Assertions in Objects or Arrays (via suffix)
+        # Target: {a: 1} as const
+        (r'(as\s+const)|(\{[^}]+\}\s+as\s+const)', 'const_assertion_count'),
+
+        # 17. Discriminated Union Hints (literal field value for 'kind', 'type', or 'tag')
+        # Target: kind: 'literal'
+        (r'\b(kind|type|tag)\s*:\s*(\'[A-Za-z_0-9]+\'|"[A-Za-z_0-9]+")', 'discriminated_union_count'),
+
+        # 18. Unique symbol declarations
+        # Target: unique symbol
+        (r'\bunique\s+symbol\b', 'unique_symbol_count'),
+
+        # 19. Readonly modifier inside object properties or tuple types
+        # Target: readonly prop: string | readonly [string, number]
+        (r'\b(readonly\s+([A-Za-z_]\w+|\[))|(\{[^}]*readonly\s+\w+:[^}]*\})', 'readonly_modifier_count'),
+
+        # 20. Optional modifiers on properties
+        # Target: prop?: string
+        (r'\w+\s*\?:', 'optional_property_count'),
     ]
     
-    # Patch patterns (any addition included)
+    # Type-related patterns (for filtering only, no scoring)
+    TYPE_KEYWORDS_PATTERNS = [
+        r'\btype\s+\w+\s*=',
+        r'\binterface\s+\w+',
+        r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]',
+        r'as\s+[A-Z][a-zA-Z]*',
+        r'<[A-Z][a-zA-Z]*>',
+        r'\btype\s+fix\b',
+        r'\bfix.*type error\b',
+        r'\bnoImplicitAny\b',
+        r'\bstrictNullChecks\b',
+        r'\badd.*\btype\b',
+        r'\bimprove.*\btyping\b',
+        r'\brefactor.*\btype\b',
+    ]
     PATCH_ADDITION_PATTERNS = [
-        (r'.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]', 15),
-        (r'.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 18),
-        (r'(interface|type)\s+\w+', 25),
-        (r'.*\s+as\s+[A-Z][a-zA-Z]*', 12),
-        (r'.*<[^<>]*[A-Z][a-zA-Z][^<>]*>', 10),
-        (r'.*:\s*any\b', 18),  # any addition
+        r'.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]',
+        r'.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]',
+        r'(interface|type)\s+\w+',
+        r'.*\s+as\s+[A-Z][a-zA-Z]*',
+        r'.*<[^<>]*[A-Z][a-zA-Z][^<>]*>',
+        r'.*:\s*any\b',
     ]
-    
-    # FP exclusion
     FP_EXCLUDE_PATTERNS = [
         r'type\s*=\s*["\']',
         r'typeof\s+\w+',
@@ -53,24 +136,12 @@ class TypeScriptTypePRExtractorV3:
         r'input.*type',
         r'\.d\.ts\b',
     ]
-    
-    # Malicious any replacement detection pattern (concrete type -> any)
-    # The first line must be a deletion (-) of a concrete type, immediately followed
-    # by an addition (+) of 'any' on the same variable.
-    # Note: Using a raw string r'' for the pattern definition.
-    ANY_REPLACEMENT_RAW_PATTERN = (
-        r'^\-\s*.*:\s*([a-zA-Z_][\w\[\]<>]*)\s*[;\)\}]?\s*$\n'
-        r'^\+\s*.*:\s*any\b',
-        re.MULTILINE
-    )
-    
-    # Score thresholds
-    MIN_TITLE_SCORE = 10
-    MIN_PATCH_SCORE = 18
-    MIN_TOTAL_SCORE = 28
+
+    ANY_REPLACEMENT_RAW_PATTERN = r'^\-\s*.*:\s*([a-zA-Z_][\w\[\]<>]*)\s*[;\)\}]?\s*$\n^\+\s*.*:\s*any\b'
 
     def __init__(self):
         self.pr_df = None
+        self.human_pr_df = None
         self.repo_df = None
         self.pr_commits_df = None
         self.pr_commit_details_df = None
@@ -79,176 +150,209 @@ class TypeScriptTypePRExtractorV3:
         self._compile_patterns()
 
     def _compile_patterns(self):
-        """Pre-compile all regular expressions for performance and add V3 patterns."""
+        """Pre-compile all regular expressions."""
         self.compiled_type_keywords = [
-            (re.compile(p, re.IGNORECASE), w) for p, w in self.TYPE_KEYWORDS_SCORED
+            re.compile(p, re.IGNORECASE) for p in self.TYPE_KEYWORDS_PATTERNS
         ]
-        # Patch patterns don't need line start markers here, handled in _score_patch
         self.compiled_patch_add_patterns = [
-            (re.compile(p), w) for p, w in self.PATCH_ADDITION_PATTERNS
+            re.compile(p) for p in self.PATCH_ADDITION_PATTERNS
         ]
         self.compiled_fp_patterns = [re.compile(p, re.IGNORECASE) for p in self.FP_EXCLUDE_PATTERNS]
         
         # Specific patterns for 'any' counting (findall)
         self.compiled_any_add = re.compile(r'^\+\s*.*:\s*any\b', re.MULTILINE)
         self.compiled_any_rem = re.compile(r'^\-\s*.*:\s*any\b', re.MULTILINE)
-
-        # Compiled Any Replacement Pattern
         self.compiled_any_replacement = re.compile(self.ANY_REPLACEMENT_RAW_PATTERN, re.MULTILINE)
+
+        # V4 NEW: Compiled Advanced Type Patterns
+        self.compiled_advanced_patterns = [
+            (re.compile(p), col_name) for p, col_name in self.ADVANCED_TYPE_PATTERNS_REFINED
+        ]
+        self.ADVANCED_COUNT_COLS = [col_name for _, col_name in self.ADVANCED_TYPE_PATTERNS_REFINED]
 
     def load_datasets(self):
         print("Loading datasets from HuggingFace...")
-        self.pr_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pull_request.parquet')
-        self.repo_df = pd.read_parquet('hf://datasets/hao-li/AIDev/repository.parquet')
-        self.pr_commits_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pr_commits.parquet')
-        self.pr_commit_details_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pr_commit_details.parquet')
-        print(f"Loaded: {len(self.pr_df):,} PRs, {len(self.repo_df):,} repos")
+        try:
+             self.pr_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pull_request.parquet')
+             self.repo_df = pd.read_parquet('hf://datasets/hao-li/AIDev/repository.parquet')
+             self.pr_commits_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pr_commits.parquet')
+             self.pr_commit_details_df = pd.read_parquet('hf://datasets/hao-li/AIDev/pr_commit_details.parquet')
+             
+             print(f"Loaded: {len(self.pr_df):,} PRs, {len(self.repo_df):,} repos")
+        except Exception as e:
+             print(f"Error loading data from HuggingFace/Parquet: {e}")
+             raise
 
-    def filter_typescript_ai_prs(self) -> pd.DataFrame:
-        """Filters TS repos and AI PRs in a single, efficient step."""
-        print("\nFiltering TypeScript AI agent PRs...")
+    def filter_prs_by_agent_status(self) -> pd.DataFrame:
+        """Filters all PRs in TS repos and marks them as 'AI' or 'Human'."""
+        if self.pr_df.empty or self.repo_df.empty:
+            return pd.DataFrame()
+            
+        print("\nFiltering TypeScript PRs and classifying by agent status...")
         
         ts_repos = self.repo_df[
             self.repo_df['language'].str.contains('TypeScript', case=False, na=False)
         ]
         ts_repo_ids = set(ts_repos['id'].tolist())
 
-        agent_prs = self.pr_df[
-            (self.pr_df['agent'].isin(self.AI_AGENTS)) &
-            (self.pr_df['repo_id'].isin(ts_repo_ids))
+        # Filter all PRs in TS repos
+        all_ts_prs = self.pr_df[
+            self.pr_df['repo_id'].isin(ts_repo_ids)
         ].copy()
-        print(f"   Found {len(agent_prs):,} AI PRs in TS repos")
-        return agent_prs
+        
+        # Classify PRs
+        all_ts_prs['group'] = all_ts_prs['agent'].apply(
+            lambda x: 'AI' if x in self.AI_AGENTS else 'Human'
+        )
+
+        print(f"   Found {len(all_ts_prs):,} total PRs in TS repos ({len(all_ts_prs[all_ts_prs['group'] == 'AI']):,} AI, {len(all_ts_prs[all_ts_prs['group'] == 'Human']):,} Human)")
+        return all_ts_prs
 
     def _has_fp(self, text: str) -> bool:
         if pd.isna(text): return False
         return any(p.search(text) for p in self.compiled_fp_patterns)
 
-    def _score_text(self, text: str) -> int:
-        if pd.isna(text): return 0
-        score = 0
-        for pattern, weight in self.compiled_type_keywords:
-            if pattern.search(text):
-                score += weight
-        return score
+    def _has_type_keywords(self, text: str) -> bool:
+        """Check if text contains type-related keywords (no scoring)."""
+        if pd.isna(text): return False
+        return any(p.search(text) for p in self.compiled_type_keywords)
 
-    def _score_patch(self, patch: str) -> int:
-        if pd.isna(patch): return 0
-        score = 0
+    def _has_patch_type_patterns(self, patch: str) -> bool:
+        """Check if patch contains type-related additions (no scoring)."""
+        if pd.isna(patch): return False
         for line in patch.splitlines():
-            # Only score additions (+) or deletions (-) that contain type info
-            if line.startswith('+') or line.startswith('-'):
-                if line.startswith('+++') or line.startswith('---'): continue
-                
-                # Check for deletion of 'any' as well, as that is a strong signal (handled by the patch patterns)
-                line_content = line[1:].strip() 
-                for pattern, weight in self.compiled_patch_add_patterns:
-                    # Note: Original score logic only scored additions. Keeping that focus.
-                    if line.startswith('+') and pattern.search(line_content):
-                        score += weight
-                        break
-        return score
+            if line.startswith('+') and not line.startswith('+++'):
+                line_content = line[1:].strip()
+                for pattern in self.compiled_patch_add_patterns:
+                    if pattern.search(line_content):
+                        return True
+        return False
 
     def _is_valid_ts_file(self, filename: str) -> bool:
         if pd.isna(filename): return False
         path = Path(filename)
+        # Exclude declaration files (.d.ts) as they often only contain type definitions
         return path.suffix.lower() in self.TS_EXTENSIONS and not path.name.endswith('.d.ts')
 
-    def identify_type_related_prs(self, agent_prs: pd.DataFrame) -> pd.DataFrame:
-        print("\nIdentifying type-related PRs with malicious any detection...")
+    def identify_type_related_prs(self, all_ts_prs: pd.DataFrame) -> pd.DataFrame:
+        if all_ts_prs.empty:
+            print("No PRs to analyze.")
+            return pd.DataFrame()
+
+        print("\nIdentifying type-related PRs with advanced feature detection...")
 
         # 1. False Positive removal
         print("   Applying FP filters...")
-        agent_prs['has_fp'] = (
-            agent_prs['title'].apply(self._has_fp) |
-            agent_prs['body'].apply(self._has_fp)
+        all_ts_prs['has_fp'] = (
+            all_ts_prs['title'].apply(self._has_fp) |
+            all_ts_prs['body'].apply(self._has_fp)
         )
-        agent_prs = agent_prs[~agent_prs['has_fp']].copy()
+        filtered_prs = all_ts_prs[~all_ts_prs['has_fp']].copy()
 
-        # 2. Text/Commit Scoring
-        agent_prs['text_score'] = agent_prs['title'].apply(self._score_text) + agent_prs['body'].apply(self._score_text)
-        commit_scores = self.pr_commits_df.groupby('pr_id').apply(
-            lambda g: max(self._score_text(msg) for msg in g['message']),
-            include_groups=False
-        ).to_dict()
-        agent_prs['commit_score'] = agent_prs['id'].map(commit_scores).fillna(0).astype(int)
+        # 2. Check for type-related keywords (no scoring)
+        print("   Checking for type-related keywords...")
+        filtered_prs['has_type_keywords'] = (
+            filtered_prs['title'].apply(self._has_type_keywords) |
+            filtered_prs['body'].apply(self._has_type_keywords)
+        )
+        
+        # Add dummy scores for compatibility (we don't use them for filtering)
+        filtered_prs['text_score'] = 0
+        filtered_prs['commit_score'] = 0
 
-        # 3. Patch analysis with any_replacements
-        print("   Analyzing patches + detecting malicious any replacements...")
+        # 3. Patch analysis with type feature counting
+        print("   Analyzing patches + counting all features...")
         ts_details = self.pr_commit_details_df[
             self.pr_commit_details_df['filename'].apply(self._is_valid_ts_file)
-        ]
+        ].copy()
 
         def analyze_patch_group(group):
-            max_score = 0
             any_add = 0
             any_rem = 0
             any_replacements = 0
+            
+            advanced_counts = {col: 0 for col in self.ADVANCED_COUNT_COLS}
 
-            for patch in group['patch']:
-                if pd.isna(patch): continue
-                
-                # Score
-                patch_score = self._score_patch(patch)
-                max_score = max(max_score, patch_score)
-                
-                # any counts (using compiled patterns)
-                any_add += len(self.compiled_any_add.findall(patch))
-                any_rem += len(self.compiled_any_rem.findall(patch))
-                
-                # 🚨 NEW: Malicious replacement count
-                any_replacements += len(self.compiled_any_replacement.findall(patch))
+            # Concatenate all valid TS patches for this PR
+            full_patch_text = "\n".join(group['patch'].dropna().tolist())
+            
+            if full_patch_text:
+                # any counts (on the combined text)
+                any_add = len(self.compiled_any_add.findall(full_patch_text))
+                any_rem = len(self.compiled_any_rem.findall(full_patch_text))
+                any_replacements = len(self.compiled_any_replacement.findall(full_patch_text))
 
-            return pd.Series({
-                'patch_score': max_score,
+                # Count advanced features on ADDED lines only
+                added_lines = "\n".join([line for line in full_patch_text.splitlines() if line.startswith('+') and not line.startswith('+++')])
+                for pattern, col_name in self.compiled_advanced_patterns:
+                    advanced_counts[col_name] += len(pattern.findall(added_lines))
+            
+            results = {
+                'patch_score': 0,  # Dummy value, not used
                 'any_additions': any_add,
                 'any_removals': any_rem,
-                'any_replacements': any_replacements # NEW
-            })
+                'any_replacements': any_replacements,
+                **advanced_counts
+            }
+            return pd.Series(results)
 
         patch_stats = ts_details.groupby('pr_id').apply(analyze_patch_group, include_groups=False)
-        agent_prs['patch_score'] = agent_prs['id'].map(patch_stats['patch_score'].to_dict()).fillna(0).astype(int)
-        agent_prs['any_additions'] = agent_prs['id'].map(patch_stats['any_additions'].to_dict()).fillna(0).astype(int)
-        agent_prs['any_removals'] = agent_prs['id'].map(patch_stats['any_removals'].to_dict()).fillna(0).astype(int)
-        agent_prs['any_replacements'] = agent_prs['id'].map(patch_stats['any_replacements'].to_dict()).fillna(0).astype(int) # NEW
+        
+        # Merge all patch stats back into the PR dataframe
+        filtered_prs = filtered_prs.merge(patch_stats, left_on='id', right_index=True, how='left')
 
-        # 4. TS file count and Total score (V2 any bonus removed)
+        # Fill NaNs for all count columns
+        count_cols = ['patch_score', 'any_additions', 'any_removals', 'any_replacements'] + self.ADVANCED_COUNT_COLS
+        for col in count_cols:
+            filtered_prs[col] = filtered_prs[col].fillna(0).astype(int)
+
+        # 4. TS file count and Total score
         ts_file_count = ts_details.groupby('pr_id').size().to_dict()
-        agent_prs['ts_file_count'] = agent_prs['id'].map(ts_file_count).fillna(0).astype(int)
-        agent_prs['has_ts_files'] = agent_prs['ts_file_count'] > 0
+        filtered_prs['ts_file_count'] = filtered_prs['id'].map(ts_file_count).fillna(0).astype(int)
+        filtered_prs['has_ts_files'] = filtered_prs['ts_file_count'] > 0
 
-        agent_prs['total_score'] = (
-            agent_prs['text_score'] +
-            agent_prs['commit_score'] +
-            agent_prs['patch_score'] +
-            (agent_prs['ts_file_count'] * 2)
-        )
+        # Set dummy total_score (not used for filtering)
+        filtered_prs['total_score'] = 0
 
-        # 5. Final filtering and detection method (unchanged)
-        type_prs = agent_prs[
-            agent_prs['has_ts_files'] &
+        # Check if patches contain type patterns
+        print("   Checking for type patterns in patches...")
+        patch_type_flags = ts_details.groupby('pr_id').apply(
+            lambda group: any(self._has_patch_type_patterns(patch) for patch in group['patch'] if pd.notna(patch)),
+            include_groups=False
+        ).to_dict()
+        filtered_prs['has_patch_type_patterns'] = filtered_prs['id'].map(patch_type_flags).fillna(False)
+        
+        # 5. Final filtering: require TS files AND (any-related changes OR type keywords/patterns) AND NOT has_fp
+        type_prs = filtered_prs[
+            filtered_prs['has_ts_files'] &
+            ~filtered_prs['has_fp'] &
             (
-                (agent_prs['text_score'] >= self.MIN_TITLE_SCORE) |
-                (agent_prs['patch_score'] >= self.MIN_PATCH_SCORE)
+                (filtered_prs['any_additions'] > 0) |
+                (filtered_prs['any_removals'] > 0) |
+                (filtered_prs['any_replacements'] > 0) 
             ) &
-            (agent_prs['total_score'] >= self.MIN_TOTAL_SCORE)
+            (filtered_prs['has_type_keywords'] | filtered_prs['has_patch_type_patterns'])
         ].copy()
 
+        # Add detection method based on what triggered inclusion
         type_prs['detection_method'] = ''
-        type_prs.loc[type_prs['text_score'] >= self.MIN_TITLE_SCORE, 'detection_method'] += 'text|'
-        type_prs.loc[type_prs['patch_score'] >= self.MIN_PATCH_SCORE, 'detection_method'] += 'patch|'
+        type_prs.loc[type_prs['any_additions'] > 0, 'detection_method'] += 'any_add|'
+        type_prs.loc[type_prs['any_removals'] > 0, 'detection_method'] += 'any_rem|'
+        type_prs.loc[type_prs['any_replacements'] > 0, 'detection_method'] += 'any_rep|'
+        type_prs.loc[type_prs['has_type_keywords'], 'detection_method'] += 'type_keywords|'
+        type_prs.loc[type_prs['has_patch_type_patterns'], 'detection_method'] += 'patch_patterns|'
         type_prs['detection_method'] = type_prs['detection_method'].str.rstrip('|')
 
-        print(f"\n   Found {len(type_prs):,} type-related PRs")
-        print(f"   any_additions: {type_prs['any_additions'].sum():,}")
-        print(f"   any_removals: {type_prs['any_removals'].sum():,}")
-        print(f"   any_replacements: {type_prs['any_replacements'].sum():,}")
-
+        print(f"\n   Found {len(type_prs):,} high-confidence type-related PRs.")
         return type_prs
 
     def enrich_with_commit_stats(self, type_prs: pd.DataFrame) -> pd.DataFrame:
-        print("\nEnriching with commit stats...")
+        if type_prs.empty:
+            return pd.DataFrame()
+        
+        print("\nEnriching with commit stats and collecting full patches...")
         ts_details = self.pr_commit_details_df[
+            self.pr_commit_details_df['pr_id'].isin(type_prs['id']) &
             self.pr_commit_details_df['filename'].apply(self._is_valid_ts_file)
         ]
 
@@ -279,41 +383,91 @@ class TypeScriptTypePRExtractorV3:
         return enriched
 
     def export_results(self, enriched_prs: pd.DataFrame, output_file: str):
+        if enriched_prs.empty:
+            print("No results to export.")
+            return
+
         print(f"\nExporting to {output_file}...")
-        # NEW: Added 'any_replacements' to export_cols
         export_cols = [
-            'id', 'number', 'title', 'body', 'agent', 'state', 'created_at', 'merged_at',
+            'id', 'number', 'title', 'body', 'agent', 'group', 'state', 'created_at', 'merged_at',
             'repo_id', 'html_url', 'additions', 'deletions', 'changes', 'ts_files_changed',
             'any_additions', 'any_removals', 'any_replacements',
+        ] + self.ADVANCED_COUNT_COLS + [
             'text_score', 'patch_score', 'total_score', 'detection_method', 'patch_text'
         ]
+        
+        export_cols = [col for col in export_cols if col in enriched_prs.columns]
+            
         enriched_prs[export_cols].to_csv(output_file, index=False)
         print(f"   Exported {len(enriched_prs):,} PRs")
 
+        # Calculate agent-specific feature density (per PR average)
+        agent_feature_density = {}
+        for agent in enriched_prs['agent'].unique():
+            agent_data = enriched_prs[enriched_prs['agent'] == agent]
+            agent_feature_density[agent] = {}
+            for col in self.ADVANCED_COUNT_COLS:
+                total = float(agent_data[col].sum())
+                count = len(agent_data)
+                agent_feature_density[agent][col] = round(total / count if count > 0 else 0, 4)
+        
+        # Calculate group-specific feature density
+        group_feature_density = {}
+        for group in enriched_prs['group'].unique():
+            group_data = enriched_prs[enriched_prs['group'] == group]
+            group_feature_density[group] = {}
+            for col in self.ADVANCED_COUNT_COLS:
+                total = float(group_data[col].sum())
+                count = len(group_data)
+                group_feature_density[group][col] = round(total / count if count > 0 else 0, 4)
+        
+        # Calculate agent-specific any statistics
+        agent_any_stats = {}
+        for agent in enriched_prs['agent'].unique():
+            agent_data = enriched_prs[enriched_prs['agent'] == agent]
+            agent_any_stats[agent] = {
+                'any_additions': int(agent_data['any_additions'].sum()),
+                'any_removals': int(agent_data['any_removals'].sum()),
+                'any_replacements': int(agent_data['any_replacements'].sum()),
+            }
+        
+        # Calculate group-specific any statistics
+        group_any_stats = {}
+        for group in enriched_prs['group'].unique():
+            group_data = enriched_prs[enriched_prs['group'] == group]
+            group_any_stats[group] = {
+                'any_additions': int(group_data['any_additions'].sum()),
+                'any_removals': int(group_data['any_removals'].sum()),
+                'any_replacements': int(group_data['any_replacements'].sum()),
+            }
+        
         summary = {
             'extraction_date': datetime.now().isoformat(),
             'total_type_prs': len(enriched_prs),
+            'by_group': enriched_prs['group'].value_counts().to_dict(),
             'by_agent': enriched_prs['agent'].value_counts().to_dict(),
             'any_additions_total': int(enriched_prs['any_additions'].sum()),
             'any_removals_total': int(enriched_prs['any_removals'].sum()),
             'any_replacements_total': int(enriched_prs['any_replacements'].sum()),
-            'prs_with_any_change': int(((enriched_prs['any_additions'] + enriched_prs['any_removals']) > 0).sum()),
-            'prs_with_any_replacement': int((enriched_prs['any_replacements'] > 0).sum()),
-            'avg_score': float(enriched_prs['total_score'].mean()),
-            'detection_methods': enriched_prs['detection_method'].value_counts().to_dict()
+            'any_replacements_pr': int((enriched_prs['any_replacements'] > 0).sum()),
+            'agent_any_stats': agent_any_stats,
+            'group_any_stats': group_any_stats,
+            'advanced_feature_totals': {col: int(enriched_prs[col].sum()) for col in self.ADVANCED_COUNT_COLS},
+            'agent_feature_density': agent_feature_density,
+            'group_feature_density': group_feature_density,
         }
         with open(output_file.replace('.csv', '_summary.json'), 'w') as f:
             json.dump(summary, f, indent=2)
         print(f"   Summary saved to {output_file.replace('.csv', '_summary.json')}")
 
-    def run_pipeline(self, output_file: str = 'ts_type_prs_with_any_replacement_optimized.csv'):
+    def run_pipeline(self, output_file: str = 'ts_type_prs_all_groups_final.csv'):
         print("="*80)
-        print("TypeScript Type-Related PR Extraction (V3 - Optimized with Any Replacement Detection)")
+        print("TypeScript Type-Related PR Extraction (V4 - Advanced Feature Analysis)")
         print("="*80)
 
         self.load_datasets()
-        agent_prs = self.filter_typescript_ai_prs() 
-        type_prs = self.identify_type_related_prs(agent_prs)
+        all_ts_prs = self.filter_prs_by_agent_status() 
+        type_prs = self.identify_type_related_prs(all_ts_prs)
         enriched = self.enrich_with_commit_stats(type_prs)
         self.export_results(enriched, output_file)
         self.typescript_type_prs = enriched
@@ -325,9 +479,8 @@ class TypeScriptTypePRExtractorV3:
 
 
 def main():
-    extractor = TypeScriptTypePRExtractorV3()
+    extractor = TypeScriptTypePRExtractorV4()
     results = extractor.run_pipeline()
-    print(f"\nFinal: {len(results):,} type-related PRs extracted.")
     return results
 
 

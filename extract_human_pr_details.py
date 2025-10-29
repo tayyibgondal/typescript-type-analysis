@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Extract detailed information from human PR dataset.
-Fetches PR title, description, state, timestamps, and git diff from GitHub.
-"""
+"""Extract detailed information from human PR dataset."""
 
 import pandas as pd
 import requests
@@ -13,10 +10,9 @@ from tqdm import tqdm
 from typing import Optional, Dict, Any, Set
 import os
 from datetime import datetime
-# load environment variables
 from dotenv import load_dotenv
+
 load_dotenv()
-# load github token from environment variables
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', None)
 
 def parse_pr_url(pr_url: str) -> Optional[Dict[str, str]]:
@@ -42,7 +38,6 @@ def fetch_pr_details(owner: str, repo: str, pr_number: str) -> Optional[Dict[str
     try:
         response = requests.get(url, headers=headers, timeout=10)
         
-        # Check rate limit
         if response.status_code == 403 and 'rate limit' in response.text.lower():
             print(f"\nRate limit exceeded. Waiting 60 seconds...")
             time.sleep(60)
@@ -108,10 +103,7 @@ def save_progress(progress_file: str, processed_indices: Set[int]):
         print(f"Error saving progress file: {e}")
 
 def process_human_pr_dataset():
-    """
-    Process the human PR dataset and extract additional information.
-    Saves progress after each extraction for resumability.
-    """
+    """Process the human PR dataset and extract additional information."""
     output_file = "human_pr_detailed_info.csv"
     progress_file = "extraction_progress.json"
     
@@ -124,18 +116,15 @@ def process_human_pr_dataset():
     print("\nSample data:")
     print(human_pr_df.head())
     
-    # Load progress
     progress = load_progress(progress_file)
     processed_indices = set(progress['processed_indices'])
     
-    # Check if output file exists and load it
     if os.path.exists(output_file):
         print(f"\nFound existing output file: {output_file}")
         result_df = pd.read_csv(output_file)
         print(f"Loaded {len(result_df)} previously processed rows")
     else:
         print("\nCreating new output file")
-        # Initialize result dataframe with all original columns plus new ones
         result_df = human_pr_df.copy()
         result_df['pr_title'] = ''
         result_df['pr_description'] = ''
@@ -145,7 +134,6 @@ def process_human_pr_dataset():
         result_df['pr_merged_at'] = ''
         result_df['patch_text'] = ''
     
-    # Identify remaining PRs to process
     all_indices = set(range(len(human_pr_df)))
     remaining_indices = sorted(all_indices - processed_indices)
     
@@ -162,11 +150,9 @@ def process_human_pr_dataset():
         print(f"  Last updated: {progress['last_updated']}")
     print(f"{'='*60}\n")
     
-    # Process each remaining PR with progress bar
     for idx in tqdm(remaining_indices, desc="Extracting PR details"):
         row = human_pr_df.iloc[idx]
         
-        # Get PR URL
         pr_url = None
         for col in ['html_url', 'url', 'pr_url', 'link', 'pr_link']:
             if col in row.index and pd.notna(row[col]):
@@ -175,12 +161,10 @@ def process_human_pr_dataset():
         
         if not pr_url:
             print(f"\nWarning: No PR URL found at index {idx}")
-            # Mark as processed even if URL not found to avoid reprocessing
             processed_indices.add(idx)
             save_progress(progress_file, processed_indices)
             continue
         
-        # Parse the PR URL
         pr_info = parse_pr_url(pr_url)
         if not pr_info:
             print(f"\nWarning: Could not parse PR URL: {pr_url}")
@@ -188,7 +172,6 @@ def process_human_pr_dataset():
             save_progress(progress_file, processed_indices)
             continue
         
-        # Fetch PR details
         pr_details = fetch_pr_details(pr_info['owner'], pr_info['repo'], pr_info['pr_number'])
         
         if pr_details:
@@ -199,20 +182,14 @@ def process_human_pr_dataset():
             result_df.at[idx, 'pr_closed_at'] = pr_details['closed_at'] or ''
             result_df.at[idx, 'pr_merged_at'] = pr_details['merged_at'] or ''
             
-            # Fetch patch text
             if pr_details['patch_url']:
                 patch_text = fetch_pr_patch(pr_details['patch_url'])
                 if patch_text:
                     result_df.at[idx, 'patch_text'] = patch_text
         
-        # Mark as processed
         processed_indices.add(idx)
-        
-        # Save progress after EACH extraction
         result_df.to_csv(output_file, index=False)
         save_progress(progress_file, processed_indices)
-        
-        # Be nice to the API - add small delay
         time.sleep(0.1)
     
     print(f"\n{'='*60}")
@@ -221,8 +198,6 @@ def process_human_pr_dataset():
     print(f"\nTotal PRs processed: {len(processed_indices)}")
     print(f"Output saved to: {output_file}")
     print(f"Progress saved to: {progress_file}")
-    
-    # Show sample of results
     print("\nSample of extracted data:")
     cols_to_show = ['pr_title', 'pr_state', 'pr_created_at']
     available_cols = [c for c in cols_to_show if c in result_df.columns]
@@ -236,7 +211,6 @@ if __name__ == "__main__":
     print("Human PR Dataset - Detailed Information Extraction")
     print("="*60)
     
-    # Check for GitHub token
     if not os.environ.get('GITHUB_TOKEN'):
         print("\nWARNING: No GITHUB_TOKEN environment variable found.")
         print("You may hit rate limits quickly (60 requests/hour vs 5000/hour with token)")
@@ -244,7 +218,6 @@ if __name__ == "__main__":
     else:
         print(f"\n✓ GitHub token loaded successfully")
     
-    # Run the extraction
     df = process_human_pr_dataset()
     
     print("\n✓ Script completed successfully!")

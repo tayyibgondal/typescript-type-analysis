@@ -1,13 +1,5 @@
 """
-High-precision pipeline to extract TypeScript type-related PRs
-with malicious any replacement detection (concrete type → any)
-
-Features:
-- Includes ALL type changes
-- Detects: - string → + any (any_replacements)
-- Counts: any_additions, any_removals, any_replacements
-- Strong FP filtering + score system
-- Full CSV + JSON summary
+Extract TypeScript type-related PRs with any replacement detection.
 """
 
 import pandas as pd
@@ -19,12 +11,9 @@ import os
 from pathlib import Path
 
 class TypeScriptTypePRExtractorV3:
-    """Extractor with malicious any replacement detection"""
+    """Extractor with any replacement detection"""
     
-    # File extensions
     TS_EXTENSIONS = {'.ts', '.tsx'}
-    
-    # Type keywords with scores
     TYPE_KEYWORDS_SCORED = [
         (r'\btype\s+\w+\s*=', 12),
         (r'\binterface\s+\w+', 12),
@@ -40,18 +29,16 @@ class TypeScriptTypePRExtractorV3:
         (r'\brefactor.*\btype\b', 6),
     ]
     
-    # Patch patterns (any addition included)
     PATCH_ADDITION_PATTERNS = [
         (r'^\+\s*.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]', 15),
         (r'^\+\s*.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 18),
         (r'^\+\s*(interface|type)\s+\w+', 25),
         (r'^\+\s*.*\s+as\s+[A-Z][a-zA-Z]*', 12),
         (r'^\+\s*.*<[^<>]*[A-Z][a-zA-Z][^<>]*>', 10),
-        (r'^\+\s*.*:\s*any\b', 18),  # any addition
-        (r'^\-\s*.*:\s*any\b', 20),  # any removal
+        (r'^\+\s*.*:\s*any\b', 18),
+        (r'^\-\s*.*:\s*any\b', 20),
     ]
     
-    # FP exclusion
     FP_EXCLUDE_PATTERNS = [
         r'type\s*=\s*["\']',
         r'typeof\s+\w+',
@@ -62,14 +49,12 @@ class TypeScriptTypePRExtractorV3:
         r'\.d\.ts\b',
     ]
     
-    # Malicious any replacement pattern
     ANY_REPLACEMENT_PATTERN = re.compile(
         r'^\-\s*.*:\s*([a-zA-Z_][\w\[\]<>]*)\s*[;\)\}]?\s*$\n'
         r'^\+\s*.*:\s*any\b',
         re.MULTILINE
     )
     
-    # Score thresholds
     MIN_TITLE_SCORE = 10
     MIN_PATCH_SCORE = 18
     MIN_TOTAL_SCORE = 28
@@ -133,14 +118,13 @@ class TypeScriptTypePRExtractorV3:
         return score
 
     def _is_valid_ts_file(self, filename: str) -> bool:
-        if pd.isna(filename): return False
+        if pd.isna(filename):
+            return False
         path = Path(filename)
         return path.suffix.lower() in self.TS_EXTENSIONS and not path.name.endswith('.d.ts')
 
     def identify_type_related_prs(self, agent_prs: pd.DataFrame) -> pd.DataFrame:
-        print("\nIdentifying type-related PRs with malicious any detection...")
-
-        # FP filtering
+        print("\nIdentifying type-related PRs with any detection...")
         print("   Applying FP filters...")
         agent_prs['has_fp'] = (
             agent_prs['title'].apply(self._has_fp) |
@@ -149,23 +133,17 @@ class TypeScriptTypePRExtractorV3:
         fp_count = agent_prs['has_fp'].sum()
         agent_prs = agent_prs[~agent_prs['has_fp']].copy()
         print(f"   Removed {fp_count:,} FPs")
-
-        # Text scoring
         print("   Scoring title & body...")
         agent_prs['title_score'] = agent_prs['title'].apply(self._score_text)
         agent_prs['body_score'] = agent_prs['body'].apply(self._score_text)
         agent_prs['text_score'] = agent_prs['title_score'] + agent_prs['body_score']
-
-        # Commit message scoring
         print("   Scoring commit messages...")
         commit_scores = self.pr_commits_df.groupby('pr_id').apply(
             lambda g: max(self._score_text(msg) for msg in g['message']),
             include_groups=False
         ).to_dict()
         agent_prs['commit_score'] = agent_prs['id'].map(commit_scores).fillna(0).astype(int)
-
-        # Patch analysis with any_replacements
-        print("   Analyzing patches + detecting malicious any replacements...")
+        print("   Analyzing patches + detecting any replacements...")
         ts_details = self.pr_commit_details_df[
             self.pr_commit_details_df['filename'].apply(self._is_valid_ts_file)
         ]
@@ -177,14 +155,12 @@ class TypeScriptTypePRExtractorV3:
             any_replacements = 0
 
             for patch in group['patch']:
-                if pd.isna(patch): continue
-                # Score
+                if pd.isna(patch):
+                    continue
                 patch_score = self._score_patch(patch)
                 max_score = max(max_score, patch_score)
-                # any counts
                 any_add += len(re.findall(r'^\+\s*.*:\s*any\b', patch, re.MULTILINE))
                 any_rem += len(re.findall(r'^\-\s*.*:\s*any\b', patch, re.MULTILINE))
-                # Malicious replacement: concrete type → any
                 any_replacements += len(self.ANY_REPLACEMENT_PATTERN.findall(patch))
 
             return pd.Series({
@@ -199,21 +175,18 @@ class TypeScriptTypePRExtractorV3:
         agent_prs['any_additions'] = agent_prs['id'].map(patch_stats['any_additions'].to_dict()).fillna(0).astype(int)
         agent_prs['any_removals'] = agent_prs['id'].map(patch_stats['any_removals'].to_dict()).fillna(0).astype(int)
         agent_prs['any_replacements'] = agent_prs['id'].map(patch_stats['any_replacements'].to_dict()).fillna(0).astype(int)
-
-        # TS file count
+        
         ts_file_count = ts_details.groupby('pr_id').size().to_dict()
         agent_prs['ts_file_count'] = agent_prs['id'].map(ts_file_count).fillna(0).astype(int)
         agent_prs['has_ts_files'] = agent_prs['ts_file_count'] > 0
-
-        # Total score
+        
         agent_prs['total_score'] = (
             agent_prs['text_score'] +
             agent_prs['commit_score'] +
             agent_prs['patch_score'] +
             (agent_prs['ts_file_count'] * 2)
         )
-
-        # Final filtering
+        
         type_prs = agent_prs[
             agent_prs['has_ts_files'] &
             (
@@ -222,8 +195,7 @@ class TypeScriptTypePRExtractorV3:
             ) &
             (agent_prs['total_score'] >= self.MIN_TOTAL_SCORE)
         ].copy()
-
-        # Detection method
+        
         type_prs['detection_method'] = ''
         type_prs.loc[type_prs['text_score'] >= self.MIN_TITLE_SCORE, 'detection_method'] += 'text|'
         type_prs.loc[type_prs['patch_score'] >= self.MIN_PATCH_SCORE, 'detection_method'] += 'patch|'

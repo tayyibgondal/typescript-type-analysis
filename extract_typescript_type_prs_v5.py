@@ -104,28 +104,28 @@ class TypeScriptTypePRExtractorV4:
         (r'\w+\s*\?:', 'optional_property_count'),
     ]
     
-    # V3 Legacy Patterns (Scores and Filters)
-    TYPE_KEYWORDS_SCORED = [
-        (r'\btype\s+\w+\s*=', 12),
-        (r'\binterface\s+\w+', 12),
-        (r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 10),
-        (r'as\s+[A-Z][a-zA-Z]*', 8),
-        (r'<[A-Z][a-zA-Z]*>', 7),
-        (r'\btype\s+fix\b', 8),
-        (r'\bfix.*type error\b', 9),
-        (r'\bnoImplicitAny\b', 11),
-        (r'\bstrictNullChecks\b', 11),
-        (r'\badd.*\btype\b', 6),
-        (r'\bimprove.*\btyping\b', 7),
-        (r'\brefactor.*\btype\b', 6),
+    # Type-related patterns (for filtering only, no scoring)
+    TYPE_KEYWORDS_PATTERNS = [
+        r'\btype\s+\w+\s*=',
+        r'\binterface\s+\w+',
+        r':\s*[A-Z][a-zA-Z]*\s*[;\)\}]',
+        r'as\s+[A-Z][a-zA-Z]*',
+        r'<[A-Z][a-zA-Z]*>',
+        r'\btype\s+fix\b',
+        r'\bfix.*type error\b',
+        r'\bnoImplicitAny\b',
+        r'\bstrictNullChecks\b',
+        r'\badd.*\btype\b',
+        r'\bimprove.*\btyping\b',
+        r'\brefactor.*\btype\b',
     ]
     PATCH_ADDITION_PATTERNS = [
-        (r'.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]', 15),
-        (r'.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]', 18),
-        (r'(interface|type)\s+\w+', 25),
-        (r'.*\s+as\s+[A-Z][a-zA-Z]*', 12),
-        (r'.*<[^<>]*[A-Z][a-zA-Z][^<>]*>', 10),
-        (r'.*:\s*any\b', 18),
+        r'.*:\s*[a-zA-Z_][\w]*\s*[;\)\}]',
+        r'.*:\s*[A-Z][a-zA-Z]*\s*[;\)\}]',
+        r'(interface|type)\s+\w+',
+        r'.*\s+as\s+[A-Z][a-zA-Z]*',
+        r'.*<[^<>]*[A-Z][a-zA-Z][^<>]*>',
+        r'.*:\s*any\b',
     ]
     FP_EXCLUDE_PATTERNS = [
         r'type\s*=\s*["\']',
@@ -138,7 +138,6 @@ class TypeScriptTypePRExtractorV4:
     ]
 
     ANY_REPLACEMENT_RAW_PATTERN = r'^\-\s*.*:\s*([a-zA-Z_][\w\[\]<>]*)\s*[;\)\}]?\s*$\n^\+\s*.*:\s*any\b'
-    MIN_TITLE_SCORE, MIN_PATCH_SCORE, MIN_TOTAL_SCORE = 10, 18, 28
 
     def __init__(self):
         self.pr_df = None
@@ -153,10 +152,10 @@ class TypeScriptTypePRExtractorV4:
     def _compile_patterns(self):
         """Pre-compile all regular expressions."""
         self.compiled_type_keywords = [
-            (re.compile(p, re.IGNORECASE), w) for p, w in self.TYPE_KEYWORDS_SCORED
+            re.compile(p, re.IGNORECASE) for p in self.TYPE_KEYWORDS_PATTERNS
         ]
         self.compiled_patch_add_patterns = [
-            (re.compile(p), w) for p, w in self.PATCH_ADDITION_PATTERNS
+            re.compile(p) for p in self.PATCH_ADDITION_PATTERNS
         ]
         self.compiled_fp_patterns = [re.compile(p, re.IGNORECASE) for p in self.FP_EXCLUDE_PATTERNS]
         
@@ -213,26 +212,21 @@ class TypeScriptTypePRExtractorV4:
         if pd.isna(text): return False
         return any(p.search(text) for p in self.compiled_fp_patterns)
 
-    def _score_text(self, text: str) -> int:
-        if pd.isna(text): return 0
-        score = 0
-        for pattern, weight in self.compiled_type_keywords:
-            if pattern.search(text):
-                score += weight
-        return score
+    def _has_type_keywords(self, text: str) -> bool:
+        """Check if text contains type-related keywords (no scoring)."""
+        if pd.isna(text): return False
+        return any(p.search(text) for p in self.compiled_type_keywords)
 
-    def _score_patch(self, patch: str) -> int:
-        if pd.isna(patch): return 0
-        score = 0
+    def _has_patch_type_patterns(self, patch: str) -> bool:
+        """Check if patch contains type-related additions (no scoring)."""
+        if pd.isna(patch): return False
         for line in patch.splitlines():
-            # Only score additions (+)
             if line.startswith('+') and not line.startswith('+++'):
-                line_content = line[1:].strip() 
-                for pattern, weight in self.compiled_patch_add_patterns:
+                line_content = line[1:].strip()
+                for pattern in self.compiled_patch_add_patterns:
                     if pattern.search(line_content):
-                        score += weight
-                        break
-        return score
+                        return True
+        return False
 
     def _is_valid_ts_file(self, filename: str) -> bool:
         if pd.isna(filename): return False
@@ -255,15 +249,16 @@ class TypeScriptTypePRExtractorV4:
         )
         filtered_prs = all_ts_prs[~all_ts_prs['has_fp']].copy()
 
-        # 2. Text/Commit Scoring
-        print("   Scoring PR titles and bodies...")
-        filtered_prs['text_score'] = filtered_prs['title'].apply(self._score_text) + filtered_prs['body'].apply(self._score_text)
+        # 2. Check for type-related keywords (no scoring)
+        print("   Checking for type-related keywords...")
+        filtered_prs['has_type_keywords'] = (
+            filtered_prs['title'].apply(self._has_type_keywords) |
+            filtered_prs['body'].apply(self._has_type_keywords)
+        )
         
-        commit_scores = self.pr_commits_df.groupby('pr_id').apply(
-            lambda g: max(self._score_text(msg) for msg in g['message']),
-            include_groups=False
-        ).to_dict()
-        filtered_prs['commit_score'] = filtered_prs['id'].map(commit_scores).fillna(0).astype(int)
+        # Add dummy scores for compatibility (we don't use them for filtering)
+        filtered_prs['text_score'] = 0
+        filtered_prs['commit_score'] = 0
 
         # 3. Patch analysis with type feature counting
         print("   Analyzing patches + counting all features...")
@@ -272,7 +267,6 @@ class TypeScriptTypePRExtractorV4:
         ].copy()
 
         def analyze_patch_group(group):
-            max_score = 0
             any_add = 0
             any_rem = 0
             any_replacements = 0
@@ -283,9 +277,6 @@ class TypeScriptTypePRExtractorV4:
             full_patch_text = "\n".join(group['patch'].dropna().tolist())
             
             if full_patch_text:
-                # Score (needs to be calculated on a per-patch basis to find max_score)
-                max_score = max(self._score_patch(patch) for patch in group['patch'].dropna())
-                
                 # any counts (on the combined text)
                 any_add = len(self.compiled_any_add.findall(full_patch_text))
                 any_rem = len(self.compiled_any_rem.findall(full_patch_text))
@@ -297,7 +288,7 @@ class TypeScriptTypePRExtractorV4:
                     advanced_counts[col_name] += len(pattern.findall(added_lines))
             
             results = {
-                'patch_score': max_score,
+                'patch_score': 0,  # Dummy value, not used
                 'any_additions': any_add,
                 'any_removals': any_rem,
                 'any_replacements': any_replacements,
@@ -320,32 +311,36 @@ class TypeScriptTypePRExtractorV4:
         filtered_prs['ts_file_count'] = filtered_prs['id'].map(ts_file_count).fillna(0).astype(int)
         filtered_prs['has_ts_files'] = filtered_prs['ts_file_count'] > 0
 
-        filtered_prs['total_score'] = (
-            filtered_prs['text_score'] +
-            filtered_prs['commit_score'] +
-            filtered_prs['patch_score'] +
-            (filtered_prs['ts_file_count'] * 2)
-        )
+        # Set dummy total_score (not used for filtering)
+        filtered_prs['total_score'] = 0
 
-        # 5. Final filtering
+        # Check if patches contain type patterns
+        print("   Checking for type patterns in patches...")
+        patch_type_flags = ts_details.groupby('pr_id').apply(
+            lambda group: any(self._has_patch_type_patterns(patch) for patch in group['patch'] if pd.notna(patch)),
+            include_groups=False
+        ).to_dict()
+        filtered_prs['has_patch_type_patterns'] = filtered_prs['id'].map(patch_type_flags).fillna(False)
+        
+        # 5. Final filtering: require TS files AND (any-related changes OR type keywords/patterns) AND NOT has_fp
         type_prs = filtered_prs[
             filtered_prs['has_ts_files'] &
-            (
-                (filtered_prs['text_score'] >= self.MIN_TITLE_SCORE) |
-                (filtered_prs['patch_score'] >= self.MIN_PATCH_SCORE)
-            ) &
-            (filtered_prs['total_score'] >= self.MIN_TOTAL_SCORE) &
+            ~filtered_prs['has_fp'] &
             (
                 (filtered_prs['any_additions'] > 0) |
                 (filtered_prs['any_removals'] > 0) |
-                (filtered_prs['any_replacements'] > 0)
-            )
+                (filtered_prs['any_replacements'] > 0) 
+            ) &
+            (filtered_prs['has_type_keywords'] | filtered_prs['has_patch_type_patterns'])
         ].copy()
 
-        # Add detection method for filtering validation
+        # Add detection method based on what triggered inclusion
         type_prs['detection_method'] = ''
-        type_prs.loc[type_prs['text_score'] >= self.MIN_TITLE_SCORE, 'detection_method'] += 'text|'
-        type_prs.loc[type_prs['patch_score'] >= self.MIN_PATCH_SCORE, 'detection_method'] += 'patch|'
+        type_prs.loc[type_prs['any_additions'] > 0, 'detection_method'] += 'any_add|'
+        type_prs.loc[type_prs['any_removals'] > 0, 'detection_method'] += 'any_rem|'
+        type_prs.loc[type_prs['any_replacements'] > 0, 'detection_method'] += 'any_rep|'
+        type_prs.loc[type_prs['has_type_keywords'], 'detection_method'] += 'type_keywords|'
+        type_prs.loc[type_prs['has_patch_type_patterns'], 'detection_method'] += 'patch_patterns|'
         type_prs['detection_method'] = type_prs['detection_method'].str.rstrip('|')
 
         print(f"\n   Found {len(type_prs):,} high-confidence type-related PRs.")

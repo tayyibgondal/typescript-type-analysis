@@ -71,11 +71,54 @@ class CSharpTypePRExtractor:
         
         # 15. Pattern matching: switch expressions, property patterns, positional patterns
         (r'(?:switch\s*\([^)]+\)|switch\s+expression|case\s+[\w<>,\s\[\]\.?{}]+:|=>\s*[\w<>,\s\[\]\.?{}]+:|\{\s*[\w\s:,]+\s*\})', 'pattern_matching_count'),
+        
+        # 16. Inheritance / Interface implementation: class A : Base, interface I : IBase
+        (r'\b(?:class|interface|struct)\s+\w+\s*:\s*(?:[\w<>,\s\[\]\.?]+(?:\s*,\s*[\w<>,\s\[\]\.?]+)*)', 'inheritance_interface_count'),
+        
+        # 17. Generic constraints: where T : class, where T : new(), where T : struct, where T : IComparable
+        (r'\bwhere\s+[\w\s,]+:\s*(?:[\w<>,\s\[\]\.?]+|class|struct|new\s*\(\s*\)|unmanaged|notnull|default)(?:\s*,\s*(?:[\w<>,\s\[\]\.?]+|class|struct|new\s*\(\s*\)|unmanaged|notnull))*', 'generic_constraints_count'),
+        
+        # 18. Variance annotations: in/out keywords in generics (e.g., IEnumerable<out T>, IComparer<in T>)
+        # Match in/out before type parameters in generic declarations - must be inside <>
+        (r'<\s*(?:[\w<>,\s\[\]\.?]*\s*,\s*)*(?:in|out)\s+[A-Z]\w*', 'variance_count'),
+        
+        # 19. Tuples: (int, string), ValueTuple<T1, T2>, Tuple<T1, T2>, named tuples (int x, string y)
+        # Match tuple syntax: (Type1, Type2) or (Type1 name1, Type2 name2) - must have comma
+        (r'\((?:\s*(?:[\w<>,\s\[\]\.?]+\s+)?\w+\s*,){1,}\s*(?:[\w<>,\s\[\]\.?]+\s+)?\w+\s*\)', 'tuple_count'),
+        (r'\b(?:ValueTuple|Tuple)<', 'tuple_generic_count'),
+        
+        # 20. Function pointers: delegate*<int, int>, delegate* managed/unmanaged
+        (r'\bdelegate\s*\*\s*(?:managed|unmanaged)?\s*(?:\[[^\]]+\])?\s*<', 'function_pointer_count'),
+        
+        # 21. Type aliases: using Alias = Type, global using Alias = Type
+        (r'\busing\s+(?:global\s+)?\w+\s*=\s*[\w<>,\s\[\]\.?]+;', 'type_alias_count'),
+        
+        # 22. Attributes: [Attribute], [MyAttribute()], [Obsolete("message")]
+        (r'\[\s*[\w\.]+(?:\s*\([^)]*\))?\s*\]', 'attribute_count'),
+        
+        # 23. Unsafe pointer types: int*, void**, MyStruct*, fixed buffers
+        # Match type* variable_name pattern (excluding comments and strings)
+        (r'\b[\w<>,\s\[\]\.?]+\*\s+[\w]+\b', 'unsafe_pointer_count'),
+        (r'\bfixed\s+[\w<>,\s\[\]\.?]+\s+[\w]+\s*\[', 'fixed_buffer_count'),
+        (r'\bunsafe\s+(?:class|struct|method|block|\{)', 'unsafe_keyword_count'),
+        
+        # 24. ref struct / readonly struct / ref readonly modifiers
+        (r'\breadonly\s+struct\s+\w+', 'readonly_struct_count'),
+        (r'\bref\s+struct\s+\w+', 'ref_struct_count'),
+        (r'\bref\s+readonly\s+[\w]+\b', 'ref_readonly_count'),
+        
+        # 25. Default interface methods: methods with bodies in interfaces (C# 8.0+)
+        # Detect method implementations in interfaces: returnType MethodName(...) { ... } or = expression;
+        # Look for interface declaration followed by method with body or default implementation
+        (r'\binterface\s+\w+[^{]*\{[^}]*?[\w<>,\s\[\]\.?]+\s+[\w]+\s*\([^)]*\)\s*(?:\{[^}]*\}|=>[^;]+;|=)', 'default_interface_method_count'),
+
+        # 26. Nullable annotations: #nullable enable/disable/restore
+        (r'\b#nullable\s+(enable|disable|restore)(\s+\w+)?\b', 'nullable_annotation_count'),
     ]
     
     # Type-related patterns (for filtering only, no scoring)
     TYPE_KEYWORDS_PATTERNS = [
-        r'\b(delegate|var|dynamic|init|typeof|record|with|is)\b',
+        r'\b(delegate|var|dynamic|init|typeof|record|with|is|where|in\s+[A-Z]|out\s+[A-Z]|ref|readonly|unsafe|fixed)\b',
         r':\s*[\w<>,\s\[\]\.?]+\s*[;\)\}]',
         r'as\s+[\w<>,\s\[\]\.?]+',
         r'<[^<>]+>',
@@ -87,6 +130,13 @@ class CSharpTypePRExtractor:
         r'\bwith\s+\{',
         r'\bis\s+',
         r'switch\s*expression',
+        r'\b(?:class|interface|struct)\s+\w+\s*:',  # Inheritance/implementation
+        r'\bwhere\s+',  # Generic constraints
+        r'\busing\s+\w+\s*=',  # Type aliases
+        r'\[[\w\.]',  # Attributes
+        r'\*\s*\w+',  # Pointer types
+        r'\([\w\s,]+\)',  # Tuples (simple detection)
+        r'\bdelegate\s*\*',  # Function pointers
     ]
     
     PATCH_ADDITION_PATTERNS = [
@@ -100,6 +150,15 @@ class CSharpTypePRExtractor:
         r'.*\s+typeof\s*\(',
         r'.*\s+with\s+\{',
         r'.*\s+is\s+',
+        r'.*\s+(?:class|interface|struct)\s+\w+\s*:',  # Inheritance/implementation
+        r'.*\s+where\s+',  # Generic constraints
+        r'.*\s+(?:in|out)\s+[A-Z]',  # Variance
+        r'.*\s+using\s+\w+\s*=',  # Type aliases
+        r'.*\[[\w\.]',  # Attributes
+        r'.*\*\s+\w+',  # Pointer types
+        r'.*\([\w\s,]+\)',  # Tuples
+        r'.*\s+delegate\s*\*',  # Function pointers
+        r'.*\s+(?:ref|readonly)\s+struct',  # Ref/readonly struct
     ]
     
     FP_EXCLUDE_PATTERNS = [
@@ -262,9 +321,18 @@ class CSharpTypePRExtractor:
                     if line.startswith('+') and not line.startswith('+++')
                 ])
                 
+                if not added_lines.strip():
+                    return pd.Series(feature_counts)
+                
                 # Count each feature pattern
                 for pattern, col_name in self.compiled_type_feature_patterns:
-                    matches = pattern.findall(added_lines)
+                    # Use finditer for patterns that need position info, findall for others
+                    if col_name in ('tuple_count', 'unsafe_pointer_count'):
+                        # Use finditer to get positions directly (much faster than findall + find)
+                        matches = list(pattern.finditer(added_lines))
+                    else:
+                        matches = pattern.findall(added_lines)
+                    
                     # Special handling for generics to avoid false positives
                     if col_name == 'generics_count':
                         # Filter out comparison operators
@@ -288,11 +356,71 @@ class CSharpTypePRExtractor:
                                     if expr and (expr[-1].isalnum() or expr[-1] in '.?)]'):
                                         filtered_matches.append(match)
                         feature_counts[col_name] += len(filtered_matches)
+                    # Special handling for variance - pattern already ensures generic context
+                    elif col_name == 'variance_count':
+                        # Pattern already checks for < context, just count matches
+                        feature_counts[col_name] += len(matches)
+                    # Special handling for tuples - ensure it's not just a method call
+                    elif col_name == 'tuple_count':
+                        filtered_count = 0
+                        for match_obj in matches:
+                            match = match_obj.group(0)
+                            start_pos = match_obj.start()
+                            end_pos = match_obj.end()
+                            
+                            # Ensure it has comma and looks like type tuple, not method call
+                            if ',' in match:
+                                # Check context - tuples are often in variable declarations or return types
+                                before_start = max(0, start_pos - 50)
+                                before_context = added_lines[before_start:start_pos]
+                                # If preceded by =, :, =>, or (type declaration keywords), likely tuple
+                                if re.search(r'(?:=\s*|:\s*|=>\s*|\(|return\s+|ref\s+|out\s+|in\s+)', before_context[-20:]):
+                                    filtered_count += 1
+                                # Also accept if it's clearly a tuple type pattern (type, type) without method name before
+                                elif not re.search(r'[a-zA-Z_]\w*\s*\($', before_context[-10:]):
+                                    # Check if it's followed by variable name or semicolon (tuple declaration)
+                                    after_end = min(len(added_lines), end_pos + 20)
+                                    after_context = added_lines[end_pos:after_end]
+                                    if re.search(r'^\s*[\w]|^\s*;|^\s*\)|^\s*$', after_context):
+                                        filtered_count += 1
+                        feature_counts[col_name] += filtered_count
+                    # Special handling for attributes - avoid array indexing [0], [1] etc.
+                    elif col_name == 'attribute_count':
+                        filtered_matches = [
+                            m for m in matches 
+                            if not re.match(r'\[\s*\d+\s*\]', m)  # Exclude numeric array indices
+                            and not re.match(r'\[[\'\"][^\'"]+[\'\"]\]', m)  # Exclude string array indices
+                            and re.search(r'[A-Z]', m)  # Attributes typically start with capital letter
+                        ]
+                        feature_counts[col_name] += len(filtered_matches)
+                    # Special handling for pointer types - avoid multiplication
+                    elif col_name == 'unsafe_pointer_count':
+                        filtered_count = 0
+                        for match_obj in matches:
+                            match = match_obj.group(0)
+                            start_pos = match_obj.start()
+                            end_pos = match_obj.end()
+                            
+                            # Ensure it's not multiplication: x * y
+                            before_start = max(0, start_pos - 10)
+                            before_context = added_lines[before_start:start_pos]
+                            after_end = min(len(added_lines), end_pos + 10)
+                            after_context = added_lines[end_pos:after_end]
+                            
+                            # If there's a type before and variable after, it's likely a pointer declaration
+                            if re.search(r'\b[\w<>,\s\[\]\.?]+\*\s+\w+', match):
+                                # Check it's not multiplication context
+                                if not (before_context.strip() and before_context.strip()[-1].isalnum() and 
+                                       after_context.strip() and after_context.strip()[0].isalnum()):
+                                    filtered_count += 1
+                        feature_counts[col_name] += filtered_count
                     else:
                         feature_counts[col_name] += len(matches)
             
             return pd.Series(feature_counts)
 
+        # Process patches with progress indication
+        print(f"   Processing {cs_details['pr_id'].nunique():,} PRs with patches...")
         patch_stats = cs_details.groupby('pr_id').apply(analyze_patch_group, include_groups=False)
         
         # Merge all patch stats back into the PR dataframe

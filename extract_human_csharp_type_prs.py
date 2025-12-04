@@ -21,7 +21,6 @@ class HumanCSharpTypePRExtractor:
         (r'\brecord\s+(?:class|struct)?\s*\w+', 'record_count'),
         (r'\binit\s*;', 'init_count'),
         (r'\brequired\s+\w+', 'required_count'),
-        (r'\bwith\s*\{', 'with_count'),
         (r'\bis\s+(?:not\s+)?\w+', 'is_pattern_count'),
         (r'\btypeof\s*\(', 'typeof_count'),
         (r'\bas\s+\w+', 'as_cast_count'),

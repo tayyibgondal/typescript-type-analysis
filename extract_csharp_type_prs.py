@@ -51,9 +51,6 @@ class CSharpTypePRExtractor:
         # 8. required keyword (C# 11+)
         (r'\brequired\s+\w+', 'required_count'),
         
-        # 9. with expressions
-        (r'\bwith\s*\{', 'with_count'),
-        
         # 10. Pattern matching (is expressions)
         (r'\bis\s+(?:not\s+)?\w+', 'is_pattern_count'),
         

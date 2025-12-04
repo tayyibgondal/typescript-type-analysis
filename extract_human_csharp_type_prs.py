@@ -23,7 +23,6 @@ class HumanCSharpTypePRExtractor:
         (r'\brequired\s+\w+', 'required_count'),
         (r'\bwith\s*\{', 'with_count'),
         (r'\bis\s+(?:not\s+)?\w+', 'is_pattern_count'),
-        (r'switch\s*\{', 'switch_expression_count'),
         (r'\btypeof\s*\(', 'typeof_count'),
         (r'\bas\s+\w+', 'as_cast_count'),
     ]

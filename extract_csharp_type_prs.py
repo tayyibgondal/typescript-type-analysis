@@ -57,49 +57,46 @@ class CSharpTypePRExtractor:
         # 10. Pattern matching (is expressions)
         (r'\bis\s+(?:not\s+)?\w+', 'is_pattern_count'),
         
-        # 11. Switch expressions
-        (r'switch\s*\{', 'switch_expression_count'),
-        
-        # 12. typeof operator
+        # 11. typeof operator
         (r'\btypeof\s*\(', 'typeof_count'),
         
-        # 13. Explicit casting (as operator)
+        # 12. Explicit casting (as operator)
         (r'\bas\s+\w+', 'as_cast_count'),
         
-        # 14. Type casting with parentheses
+        # 13. Type casting with parentheses
         (r'\([A-Z]\w*[<>\[\]]*\)\s*\w+', 'explicit_cast_count'),
         
-        # 15. Generic constraints (where clauses)
+        # 14. Generic constraints (where clauses)
         (r'\bwhere\s+\w+\s*:\s*\w+', 'generic_constraints_count'),
         
-        # 16. Variance (in/out in generics)
+        # 15. Variance (in/out in generics)
         (r'<\s*(?:in|out)\s+\w+', 'variance_count'),
         
-        # 17. Tuples
+        # 16. Tuples
         (r'\([\w\s,<>\[\]]+,[\w\s,<>\[\]]+\)', 'tuple_count'),
         
-        # 18. Delegates
+        # 17. Delegates
         (r'\bdelegate\s+\w+', 'delegate_count'),
         
-        # 19. Attributes
+        # 18. Attributes
         (r'\[[A-Z]\w*(?:\([^\)]*\))?\]', 'attribute_count'),
         
-        # 20. Inheritance/Interface implementation
+        # 19. Inheritance/Interface implementation
         (r'\b(?:class|interface|struct)\s+\w+\s*:\s*\w+', 'inheritance_count'),
         
-        # 21. Type aliases (using directives)
+        # 20. Type aliases (using directives)
         (r'\busing\s+\w+\s*=\s*[\w<>,\s\[\]\.]+;', 'type_alias_count'),
         
-        # 22. Nullable directives
+        # 21. Nullable directives
         (r'#nullable\s+(?:enable|disable|restore)', 'nullable_directive_count'),
         
-        # 23. readonly struct
+        # 22. readonly struct
         (r'\breadonly\s+struct\s+\w+', 'readonly_struct_count'),
         
-        # 24. ref struct
+        # 23. ref struct
         (r'\bref\s+struct\s+\w+', 'ref_struct_count'),
         
-        # 25. ref readonly
+        # 24. ref readonly
         (r'\bref\s+readonly\s+\w+', 'ref_readonly_count'),
     ]
     
